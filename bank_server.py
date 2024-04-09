@@ -1,117 +1,189 @@
+import json
+import secrets
+import hmac
 import socket
 import threading
-import hashlib
-import hmac
-import os
 
-# Define global variables
-MASTER_SECRET = b''  # Master Secret key shared between ATM and server
-DATA_ENCRYPTION_KEY = b''  # Key for data encryption
-MAC_KEY = b''  # Key for Message Authentication Code
-client_accounts = [["client_1", "secret_1"], ["client_2", "secret_2"], ["client_3", "secret_3"]]  # Dictionary to store ATM clients' information
-AUDIT_LOG_FILE = "audit_log.txt"
+from hashlib import sha256
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-
-def generate_master_secret():
-    """
-    Generate a Master Secret key.
-    """
-    global MASTER_SECRET
-    MASTER_SECRET = os.urandom(16)
+# Global variables
+registered_clients = {"user_pass": 500, "seconduser_secondpass": 400, "thirduser_thirdpass": 600}
+audit_log_file = "audit_log.bin"
+SHARED_KEY = b"network security"  # Shared key constant
 
 
-def key_derivation():
-    """
-    Derive two keys from the Master Secret: one for data encryption, the other for MAC.
-    """
-    global DATA_ENCRYPTION_KEY, MAC_KEY
-    derived_key = hashlib.sha256(MASTER_SECRET).digest()
-    DATA_ENCRYPTION_KEY = derived_key[:16]  # Using the first 128 bits for encryption
-    MAC_KEY = derived_key[16:]  # Using the next 128 bits for MAC
+# Bank Server class
+class BankServer:
+ def __init__(self, host, port): #constructor
+        self.host = host
+        self.port = port
+        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.bind((self.host, self.port))
 
 
-def generate_mac(data):
-    """
-    Generate a Message Authentication Code (MAC) for data integrity.
-    """
-    return hmac.new(MAC_KEY, data, hashlib.sha256).digest()
-
-
-def verify_mac(data, mac_received):
-    """
-    Verify the Message Authentication Code (MAC) for data integrity.
-    """
-    return hmac.compare_digest(generate_mac(data), mac_received)
-
-
-def log_transaction(username, action, amount):
-    """
-    Log the transaction information into an audit log file.
-    """
-    with open(AUDIT_LOG_FILE, "a") as file:
-        file.write(f"Username: {username}, Action: {action}, Amount: {amount}\n")
-
-
-def handle_client_connection(client_socket, client_address):
-    """
-    Handle the connection from an ATM client.
-    """
+ def handle_client(self, client_socket, client_address):
     try:
-        # Getting authenticated
-        print("Entered authentication phase")
-        username, password = client_socket.recv(1024).decode().split(",")
-        if [username, password] in client_accounts:
-            print("Entered if statement for authentication")
-            client_socket.send(b"Authenticated successfully")
-        else:
-            client_socket.send(b"Authentication Failed. Invalid username and/or password.")
-            client_socket.close()
-            return
+      while True:
+        accountKey = client_socket.recv(480).decode().strip() #<username>_<password>
 
-        # Server sends master secret key to client
-        client_socket.send(MASTER_SECRET)
+        if accountKey in registered_clients.keys():  # indicates that user submitted valid login information
+            client_socket.sendall(self.pad(b"Login successful"))
+            # Generate nonce for authentication
+            server_nonce = secrets.token_bytes(16)
+            client_socket.sendall(self.encrypt_data(server_nonce, SHARED_KEY))
 
+            # Receive nonce from client
+            client_nonce = client_socket.recv(16)
 
-        # Data transaction phase
-        while True:
-            action = client_socket.recv(1024).decode() #receive action input from client and socket, and convert bytes message into string
-            amount = client_socket.recv(1024).decode()
-            mac_received = client_socket.recv(32)  # 256-bit MAC
+            # Authenticate client using nonces and shared key
+            if server_nonce == self.decrypt_data(client_nonce, SHARED_KEY):
+                client_socket.sendall(self.pad(b"Client is successfully authenticated."))
 
-            if verify_mac(action.encode() + amount.encode(), mac_received):
-                # Process the transaction
-                log_transaction(username, action, amount)
-                client_socket.send(b"Transaction Successful")
+                #Now, server is authenticated by client
+                client_socket.sendall(self.encrypt_data(self.decrypt_data(client_socket.recv(16), SHARED_KEY), SHARED_KEY))
+                # Run authenticated key distribution protocol
+                master_secret = self.run_authenticated_key_distribution_protocol(client_socket)
+
+                # Derive encryption key and MAC key from master secret
+                encryption_key, mac_key = self.derive_keys_from_master_secret(master_secret)
+                client_socket.sendall(encryption_key)
+                client_socket.sendall(mac_key)
+
+                while True:
+                    # Receive encrypted transaction data from client
+                    encrypted_transaction_data = client_socket.recv(480)
+
+                    # Receive MAC from client
+                    received_mac = client_socket.recv(32)
+
+                    # Verify MAC
+                    calculated_mac = hmac.new(mac_key, encrypted_transaction_data, sha256).digest()
+                     
+                    if hmac.compare_digest(received_mac, calculated_mac):
+                        print("The mac generated by the client is valid")
+                        # Decrypt transaction data
+                        transaction_data = self.decrypt_data(encrypted_transaction_data, encryption_key)
+
+                        # Process transaction
+
+                        transaction = transaction_data.decode().split("/") #<action>/<amount>
+                        action = transaction[0].strip()
+                        amount = int(transaction[1])
+                        if action == "deposit":
+                            print("entered deposit")
+                            registered_clients[accountKey] += amount
+                        elif action == "withdraw":
+                            if amount <= registered_clients[accountKey]:
+                               registered_clients[accountKey] -= amount
+                            else:
+                                client_socket.sendall((self.encrypt_data(self.pad(b"Withdrawal cannot be processed, since balance is insufficient."), encryption_key)))
+                        #no change is made for account inquiry
+                        # Log transaction
+                        log_data = {
+                            "username": accountKey.split("_")[0],
+                            "action": action,
+                            "time": transaction[2].strip()
+                        }
+
+                        self.encrypt_and_write_to_log(log_data, encryption_key, audit_log_file) #data must be encrypted prior to writing ot the log file
+
+                        message = ("Transaction is successful. Your current balance is: " + str(registered_clients[accountKey]) + " dollars.").encode()
+                        #Encrypt data prior to sending it to client
+                        encrypted_message = self.encrypt_data(self.pad(message), encryption_key)
+                        client_socket.sendall(encrypted_message)
+                        client_socket.sendall(hmac.new(mac_key, encrypted_message, sha256).digest())
+    
+                    else: #hmac values do not match
+                        message = b"Transaction failed due to data tampering. HMAC values do not match." #converted to bytes
+                        encrypted_message = self.encrypt_data(self.pad(message), encryption_key)
+                        client_socket.sendall(self.encrypt_data(self.pad(message), encryption_key))
             else:
-                client_socket.send(b"Transaction Failed: Integrity Check Failed")
+                print("Authentication failed. Nonces do not match.")
+                message = b"Authentication failed. Nonces do not match."
+                client_socket.sendall(self.pad(message))
+        else:
+            message = b"Authentication error. User logged in with invalid credentials."
+            client_socket.sendall(self.pad(message))
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Client {client_address}: {str(e)} focibly closed connection")
     finally:
         client_socket.close()
 
 
-def main():
-    # The server socket must first be initialized
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(("localhost", 45687))
-    server_socket.listen(3)  # Initializes the bank server to listen to three client connections
+ def run_authenticated_key_distribution_protocol(self, client_socket):
+    # Generate Master Secret
+    master_secret = secrets.token_bytes(32)
+    # Send Master Secret to client
+    #client_socket.sendall(master_secret) #no need to encode, as message is already in bytes
+    return master_secret
+ 
+ def pad(self,message):
+        return message.ljust(480)
+   
 
-    generate_master_secret()
-    key_derivation()
-
-    print("Server started. Listening for connections...")
-
-    try:
-        while True:
-            client_socket, client_address = server_socket.accept()
-            print(f"Connection from {client_address} established.")
-            threading.Thread(target=handle_client_connection, args=(client_socket, client_address)).start()
-    except KeyboardInterrupt:
-        print("Server shutting down...")
-    finally:
-        server_socket.close()
+ def derive_keys_from_master_secret(self, master_secret):
+    # Derive encryption key and MAC key
+    encryption_key = master_secret[:16]  # Use the first 16 bytes of the master secret as the encryption key
+    mac_key = master_secret[16:]  # Use the remaining bytes of the master secret as the MAC key
+    return encryption_key, mac_key
+ 
+ def encrypt_data(self, encrypted_data, encryption_key):
+    # Encrypt transaction data
+    cipher = Cipher(algorithms.AES(encryption_key), modes.CBC(b'\x00' * 16), backend=default_backend())
+    encryptor_block = cipher.encryptor()
+    encrypted_data = encryptor_block.update(encrypted_data) + encryptor_block.finalize()
+    return encrypted_data.rstrip(b"\x00")
 
 
+ def decrypt_data(self, encrypted_data, encryption_key):
+    # Decrypt transaction data
+    cipher = Cipher(algorithms.AES(encryption_key), modes.CBC(b'\x00' * 16), backend=default_backend())
+    decryptor = cipher.decryptor()
+    decrypted_data = decryptor.update(encrypted_data) + decryptor.finalize()
+    return decrypted_data.rstrip(b"\x00")
+
+
+ def encrypt_and_write_to_log(self, data, encryption_key, log_file):
+    # Encrypt log data
+    cipher = Cipher(algorithms.AES(encryption_key), modes.CBC(b'\x00' * 16), backend=default_backend())
+    encryptor = cipher.encryptor()
+    encrypted_data = encryptor.update(self.pad(json.dumps(data).encode())) + encryptor.finalize()
+
+    # Write encrypted data to log file
+    with open(log_file, "ab") as f:
+        f.write(encrypted_data)
+
+    print("audit log successful")
+    decryptor = cipher.decryptor()
+    print("Transaction information: " + decryptor.update(encrypted_data).decode())
+
+
+#authentication protocol
+ def authenticate_client(self, client_nonce, server_nonce):
+    # Authenticate client using nonces and shared key
+    expected_hmac = hmac.HMAC(SHARED_KEY, hashes.SHA256(), backend=default_backend())
+    expected_hmac.update(server_nonce)
+    expected_mac = expected_hmac.finalize()
+    client_mac = hmac.HMAC(SHARED_KEY, hashes.SHA256(), backend=default_backend())
+    client_mac.update(client_nonce)
+    return hmac.compare_digest(expected_mac, client_mac.finalize())
+
+
+ def start(self):
+    self.server_socket.listen(5)
+    print(f"Bank server listening on {self.host}:{self.port}...")
+    while True:
+        client_socket, client_address = self.server_socket.accept() #accept new connection
+        print(f"New connection from {client_address}")
+        client_thread = threading.Thread(target=self.handle_client, args=(client_socket, client_address))
+        client_thread.start()
+
+
+ # Main function
 if __name__ == "__main__":
-    main()
+    bank_server = BankServer("localhost", 41887)
+    bank_server.start()
