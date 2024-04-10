@@ -18,6 +18,23 @@ class BankClient:
         self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.client_socket.connect((self.host, self.port))
 
+    def create_account(self,username, password):
+        self.client_socket.send(self.pad((username + "_" + password + "/create_account").encode()))
+        create_account_response = self.client_socket.recv(480).decode().strip()
+
+        while create_account_response != "Valid username and password.":
+           print(create_account_response)
+           username = input("Please enter another username that is not already taken: ")
+           password = input("Please enter another password that is not already taken: ")
+           self.client_socket.send(self.pad((username + "_" + password + "/create_account").encode()))
+           create_account_response = self.client_socket.recv(480).decode().strip()
+        
+        initial_balance = input("Please enter your initial bank balance: ")
+        self.client_socket.send(self.pad(initial_balance.encode()))
+        print(self.client_socket.recv(480).decode().strip())
+           
+
+
     def login_and_authenticate(self, username, password):
        #send username and password
        print(username)
@@ -74,10 +91,18 @@ class BankClient:
 # Main function
 if __name__ == "__main__":
     # Initialize client
-    bank_client = BankClient("localhost", 41887) #call the constructor
+    bank_client = BankClient("localhost", 43895) #call the constructor
 
     try:
       isActive = True
+      userStatus = input("Do you wish to create a new account? (y/n) ")
+      if userStatus == 'y':
+         print("Create an account\n")
+         username = input("Please enter desired username: ")
+         password = input("Please enter desired password: ")
+         bank_client.create_account(username, password)
+
+      print("Please login \n")
       username = input("Please enter your username: ")
       password = input("Please enter your password: ")
       continueSession = ""
@@ -100,7 +125,7 @@ if __name__ == "__main__":
           if action != "inquiry":
               amount = input("Please enter the amount you wish to deposit/withdraw (Enter 0 for banking inquiry): ")
            
-           # Generate current timestamp
+           # Generate current timestamp  
           timestamp = datetime.now()
 
            # Format timestamp as string
@@ -131,8 +156,5 @@ if __name__ == "__main__":
 
     finally:
         print("Exited while loop, bank client closing connection.")
-        """encrypted_message = bank_client.encrypt_data(bank_client.pad(b"Client socket is closing connection"), encryption_key)
-        bank_client.client_socket.send(encrypted_message)
-        bank_client.client_socket.send(hmac.new(mac_key, encrypted_message, sha256).digest())"""
         # Close connection
         bank_client.client_socket.close()

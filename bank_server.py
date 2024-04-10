@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 # Global variables
-registered_clients = {"user_pass": 500, "seconduser_secondpass": 400, "thirduser_thirdpass": 600}
+registered_clients = {"user_pass": 500}
 audit_log_file = "audit_log.bin"
 SHARED_KEY = b"network security"  # Shared key constant
 
@@ -29,7 +29,17 @@ class BankServer:
       while True:
         accountKey = client_socket.recv(480).decode().strip() #<username>_<password>
 
-        if accountKey in registered_clients.keys():  # indicates that user submitted valid login information
+        if accountKey.__contains__("/create_account"): #handling client's request to create new account
+            user_pass = accountKey.split("/")[0]
+            while user_pass in registered_clients.keys():
+                client_socket.send(self.pad(("Username " + user_pass.split("_")[0] + " and password " + user_pass.split("_")[1] + " are already taken. Please try again.").encode()))
+                user_pass = client_socket.recv(480).decode().strip().split("/")[0]
+            client_socket.send(self.pad(b"Valid username and password."))
+            initial_balance = client_socket.recv(480).decode().strip()
+            registered_clients[user_pass] = int(initial_balance) #add new bank account to registered_clients variable
+            client_socket.send(self.pad(b"Bank account successfully created."))
+       
+        elif accountKey in registered_clients.keys():  # indicates that user submitted valid login information
             client_socket.sendall(self.pad(b"Login successful"))
             # Generate nonce for authentication
             server_nonce = secrets.token_bytes(16)
@@ -109,7 +119,7 @@ class BankServer:
             client_socket.sendall(self.pad(message))
 
     except Exception as e:
-        print(f"Client {client_address}: {str(e)} focibly closed connection")
+        print(f"Error handling client {client_address}: {str(e)}")
     finally:
         client_socket.close()
 
@@ -185,5 +195,5 @@ class BankServer:
 
  # Main function
 if __name__ == "__main__":
-    bank_server = BankServer("localhost", 41887)
+    bank_server = BankServer("localhost", 43895)
     bank_server.start()
