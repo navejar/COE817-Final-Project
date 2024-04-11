@@ -67,7 +67,7 @@ class BankServer:
                     encrypted_transaction_data = client_socket.recv(480)
 
                     # Receive MAC from client
-                    received_mac = client_socket.recv(32)
+                    received_mac = self.decrypt_data(client_socket.recv(32), encryption_key)
 
                     # Verify MAC
                     calculated_mac = hmac.new(mac_key, encrypted_transaction_data, sha256).digest()
@@ -90,6 +90,7 @@ class BankServer:
                                registered_clients[accountKey] -= amount
                             else:
                                 client_socket.sendall((self.encrypt_data(self.pad(b"Withdrawal cannot be processed, since balance is insufficient."), encryption_key)))
+                                client_socket.sendall(self.encrypt_data(hmac.new(mac_key, encrypted_message, sha256).digest(), encryption_key))
                         #no change is made for account inquiry
                         # Log transaction
                         log_data = {
@@ -104,11 +105,11 @@ class BankServer:
                         #Encrypt data prior to sending it to client
                         encrypted_message = self.encrypt_data(self.pad(message), encryption_key)
                         client_socket.sendall(encrypted_message)
-                        client_socket.sendall(hmac.new(mac_key, encrypted_message, sha256).digest())
+                        client_socket.sendall(self.encrypt_data(hmac.new(mac_key, encrypted_message, sha256).digest(), encryption_key))
     
                     else: #hmac values do not match
                         message = b"Transaction failed due to data tampering. HMAC values do not match." #converted to bytes
-                        encrypted_message = self.encrypt_data(self.pad(message), encryption_key)
+                        #encrypted_message = self.encrypt_data(self.pad(message), encryption_key)
                         client_socket.sendall(self.encrypt_data(self.pad(message), encryption_key))
             else:
                 print("Authentication failed. Nonces do not match.")
@@ -127,8 +128,6 @@ class BankServer:
  def run_authenticated_key_distribution_protocol(self, client_socket):
     # Generate Master Secret
     master_secret = secrets.token_bytes(32)
-    # Send Master Secret to client
-    #client_socket.sendall(master_secret) #no need to encode, as message is already in bytes
     return master_secret
  
  def pad(self,message):
@@ -172,17 +171,6 @@ class BankServer:
     print("Transaction information: " + decryptor.update(encrypted_data).decode())
 
 
-#authentication protocol
- def authenticate_client(self, client_nonce, server_nonce):
-    # Authenticate client using nonces and shared key
-    expected_hmac = hmac.HMAC(SHARED_KEY, hashes.SHA256(), backend=default_backend())
-    expected_hmac.update(server_nonce)
-    expected_mac = expected_hmac.finalize()
-    client_mac = hmac.HMAC(SHARED_KEY, hashes.SHA256(), backend=default_backend())
-    client_mac.update(client_nonce)
-    return hmac.compare_digest(expected_mac, client_mac.finalize())
-
-
  def start(self):
     self.server_socket.listen(5)
     print(f"Bank server listening on {self.host}:{self.port}...")
@@ -195,5 +183,5 @@ class BankServer:
 
  # Main function
 if __name__ == "__main__":
-    bank_server = BankServer("localhost", 43895)
+    bank_server = BankServer("localhost", 52895)
     bank_server.start()

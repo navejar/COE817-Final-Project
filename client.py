@@ -37,8 +37,6 @@ class BankClient:
 
     def login_and_authenticate(self, username, password):
        #send username and password
-       print(username)
-       print(password)
        encoded_login = self.pad((username + "_" + password).encode())
        self.client_socket.sendall(encoded_login)
 
@@ -91,7 +89,7 @@ class BankClient:
 # Main function
 if __name__ == "__main__":
     # Initialize client
-    bank_client = BankClient("localhost", 43895) #call the constructor
+    bank_client = BankClient("localhost", 52895) #call the constructor
 
     try:
       isActive = True
@@ -118,12 +116,12 @@ if __name__ == "__main__":
 
           action = input("Please enter the type of transaction you wish to complete: ")
 
-          while action not in ["deposit", "withdraw", "banking inquiry"]:
+          while action not in ["deposit", "withdraw", "balance inquiry"]:
                 action = input("Invalid action. Please choose another action: ")
 
           amount = ""
           if action != "inquiry":
-              amount = input("Please enter the amount you wish to deposit/withdraw (Enter 0 for banking inquiry): ")
+              amount = input("Please enter the amount you wish to deposit/withdraw (Enter 0 for balance inquiry): ")
            
            # Generate current timestamp  
           timestamp = datetime.now()
@@ -132,9 +130,9 @@ if __name__ == "__main__":
           timestamp_str = timestamp.strftime("%Y-%m-%d %H:%M:%S")
           transaction_message = bank_client.encrypt_data(bank_client.pad((action + "/" + amount + "/" + timestamp_str).encode()), encryption_key)
           bank_client.client_socket.send(transaction_message)
-          bank_client.client_socket.send(hmac.new(mac_key, transaction_message, sha256).digest())
+          bank_client.client_socket.send(bank_client.encrypt_data(hmac.new(mac_key, transaction_message, sha256).digest(), encryption_key))
           transaction_response = bank_client.client_socket.recv(480)
-          server_mac = bank_client.client_socket.recv(32)
+          server_mac = bank_client.decrypt_data(bank_client.client_socket.recv(32), encryption_key)
           expected_mac = hmac.new(mac_key, transaction_response, sha256).digest()
 
           if hmac.compare_digest(server_mac, expected_mac):
