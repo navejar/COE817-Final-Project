@@ -89,8 +89,9 @@ class BankServer:
                             if amount <= registered_clients[accountKey]:
                                registered_clients[accountKey] -= amount
                             else:
-                                client_socket.sendall((self.encrypt_data(self.pad(b"Withdrawal cannot be processed, since balance is insufficient."), encryption_key)))
-                                client_socket.sendall(self.encrypt_data(hmac.new(mac_key, encrypted_message, sha256).digest(), encryption_key))
+                                encryption_message = self.encrypt_data(self.pad(b"Withdrawal cannot be processed, since balance is insufficient."), encryption_key)
+                                client_socket.sendall(encryption_message)
+                                client_socket.sendall(self.encrypt_data(hmac.new(mac_key, encryption_message, sha256).digest(), encryption_key))
                         #no change is made for account inquiry
                         # Log transaction
                         log_data = {
@@ -183,5 +184,5 @@ class BankServer:
 
  # Main function
 if __name__ == "__main__":
-    bank_server = BankServer("localhost", 52895)
+    bank_server = BankServer("localhost", 56897)
     bank_server.start()

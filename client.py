@@ -89,7 +89,7 @@ class BankClient:
 # Main function
 if __name__ == "__main__":
     # Initialize client
-    bank_client = BankClient("localhost", 52895) #call the constructor
+    bank_client = BankClient("localhost", 56897) #call the constructor
 
     try:
       isActive = True
